@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+
+# 索引库与运行时文件（数据目录位于 <DSH_HOME>/local-kb/，正常不会出现在仓库里）
+index.sqlite
+index.sqlite-journal
+index.sqlite-wal
+index.sqlite-shm
+settings.json
+
+# 日志与临时文件
+*.log
+*.tmp
+_*.mjs

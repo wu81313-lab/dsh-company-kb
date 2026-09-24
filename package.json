@@ -1,0 +1,62 @@
+{
+  "name": "dsh-company-kb",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "DSH local folder knowledge base: manual-sync indexing, Chinese hybrid retrieval, explicit-invocation gate, and a Web panel.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "knowledge-base",
+    "rag",
+    "sqlite",
+    "fts5",
+    "chinese-search",
+    "local-first"
+  ],
+  "license": "MIT",
+  "author": "wu81313-lab",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wu81313-lab/dsh-company-kb.git"
+  },
+  "homepage": "https://github.com/wu81313-lab/dsh-company-kb#readme",
+  "bugs": {
+    "url": "https://github.com/wu81313-lab/dsh-company-kb/issues"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.mjs",
+    "lib/**/*.ps1",
+    "cordis.patch.yml",
+    "skills/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  }
+}

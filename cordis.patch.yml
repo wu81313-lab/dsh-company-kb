@@ -1,0 +1,27 @@
+# dsh-company-kb：本包作为 DSH profile bundle，向组合树插入一行宿主插件。
+# 该文件由本包自己携带，因此不必改动用户的 cordis.patch.yml。
+#
+# 改配置有两种方式：
+#   1) 直接改这里的 config（重启后生效）；
+#   2) 插件运行后用面板「设置」页写入 <DSH_HOME>/local-kb/settings.json（热生效，不用重启）。
+# 第二种优先于第一种。
+- insert:
+    - id: company-kb
+      name: dsh-company-kb
+      config:
+        # 要索引的目录：填你自己的资料目录（可多个）。插件对它们只读，永不写入。
+        # 例：
+        #   roots:
+        #     - 'D:\公司资料'
+        roots: []
+        # 索引库与运行时设置：放在 DSH 持久目录，绝不放进被索引的文件夹。
+        databasePath: !!js dshHomePath('local-kb/index.sqlite')
+        settingsPath: !!js dshHomePath('local-kb/settings.json')
+        # 纯手动同步：'off' 表示只在面板按钮 / 明确要求 / CLI 触发时才动索引。
+        # 想恢复"改完文件就自动重建"可改成 'watch'（事件驱动，仍然没有定时器）。
+        autoSync: 'off'
+        # 显式调用：未点名时检索与同步一律拒绝。
+        explicitOnly: true
+        # Web 面板：挂在现有 DSH 站点下的同源路由，不开新端口。
+        exposeWeb: true
+        webPath: '/company-kb-api'
