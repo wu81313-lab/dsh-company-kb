@@ -13,6 +13,7 @@ import { createSettings } from '../lib/settings.js';
 import { openStore } from '../lib/store.js';
 import { createSyncEngine } from '../lib/scan.js';
 import { buildSearchPlan } from '../lib/segment.js';
+import { makeZip } from './helpers/zip-writer.mjs';
 
 function stubOcr() {
   const capabilities = { ocr: false, pdf: false, word: false, ocrLangs: [], note: 'stub' };
@@ -24,7 +25,7 @@ function stubOcr() {
   };
 }
 
-function setup() {
+function setup({ ocr = stubOcr() } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-company-kb-sync-'));
   const root = join(dir, '资料');
   mkdirSync(join(root, '方案模板'), { recursive: true });
@@ -38,7 +39,7 @@ function setup() {
   });
   const store = openStore({ databasePath: join(dir, 'index.sqlite'), logger: { warn: () => {} } });
   store.migrate();
-  const engine = createSyncEngine({ settings, store, ocr: stubOcr(), logger: { warn: () => {} } });
+  const engine = createSyncEngine({ settings, store, ocr, logger: { warn: () => {} } });
   return {
     dir,
     root,
@@ -172,6 +173,144 @@ test('同步记录带逐文件明细：新增/更新/删除都能看到具体文
 
     // 4) 旧记录（没有明细的那些）读出来必须是 null，而不是崩
     assert.equal(context.store.recentLogs(50).every(entry => 'details' in entry), true);
+  } finally {
+    context.cleanup();
+  }
+});
+
+test('重抽指定文件：只动那几个文件，不碰其它（失败重试用）', async () => {
+  const context = setup();
+  try {
+    await context.engine.run('now');
+    // 三个文件都没变，指定只重抽其中一个
+    const summary = await context.engine.run('now', { only: ['公司简介.txt'] });
+    assert.equal(summary.mode, 'retry');
+    assert.equal(summary.updated, 1);
+    assert.equal(summary.added, 0);
+    assert.equal(summary.unchanged, 2, '没指定的文件按未变化处理');
+    assert.equal(summary.removed, 0, '重抽绝不能把别的文件当成删除');
+    assert.equal(context.store.stats().docs, 3, '索引里的文件数不应变化');
+
+    const log = context.store.recentLogs(1)[0];
+    assert.match(log.message, /同步\(retry\)/u);
+    assert.deepEqual(log.details.updated.map(item => item.rel), ['公司简介.txt']);
+  } finally {
+    context.cleanup();
+  }
+});
+
+test('内嵌图片 OCR：有正文的文档也会把图里的字纳入检索，且命中缓存不重复识别', async () => {
+  const recognized = [];
+  const capabilities = { ocr: true, pdf: true, word: false, ocrLangs: ['zh-Hans-CN'], note: 'stub' };
+  const ocr = {
+    capabilities,
+    probe: async () => capabilities,
+    recognize: async jobs => {
+      recognized.push(...jobs.map(job => job.path));
+      return new Map(jobs.map(job => [job.id, { ok: true, text: '架构图上的唯一标记 PICONLY-7788' }]));
+    },
+    readLegacyDocs: async () => new Map(),
+  };
+  const context = setup({ ocr });
+  try {
+    // 有正文 + 一张 30KB 的截图（小于阈值的小图会被当 logo 跳过）
+    const docx = makeZip({
+      'word/document.xml': '<?xml version="1.0"?><w:document><w:body>'
+        + '<w:p><w:r><w:t>本段是正文，讲的是系统部署方式。</w:t></w:r></w:p></w:body></w:document>',
+      'word/media/screenshot.png': Buffer.alloc(30 * 1024, 7),
+    });
+    writeFileSync(join(context.root, '带截图的方案.docx'), docx);
+
+    const summary = await context.engine.run('now');
+    assert.equal(summary.embeddedImages, 1, '应把一张内嵌图片纳入索引');
+    assert.equal(recognized.length, 1, '应调用一次图片 OCR');
+
+    // 正文与图片文字都能搜到
+    assert.ok(context.store.search(buildSearchPlan('系统部署方式')).hits.length > 0);
+    const imageHit = context.store.search(buildSearchPlan('PICONLY-7788'));
+    assert.equal(imageHit.hits.length, 1, '图片里的字必须能搜到');
+    assert.match(imageHit.hits[0].snippet, /【图片1】/u, '应标明这段文字来自图片');
+    assert.equal(context.store.imageOcrStats().images, 1, 'OCR 结果应写入缓存');
+
+    // 第二次同步：文件没变不会重抽；改一下 mtime 强制重抽，也要命中缓存不再 OCR
+    const recognizedBefore = recognized.length;
+    const target = join(context.root, '带截图的方案.docx');
+    writeFileSync(target, docx);
+    await context.engine.run('now');
+    assert.equal(recognized.length, recognizedBefore, '同一张图不应重复 OCR（应命中 sha1 缓存）');
+    assert.equal(context.store.search(buildSearchPlan('PICONLY-7788')).hits.length, 1);
+  } finally {
+    context.cleanup();
+  }
+});
+
+test('内嵌图片 OCR：开关从关到开时，老文件会被自动补做（不必整库重建）', async () => {
+  const capabilities = { ocr: true, pdf: true, word: false, ocrLangs: ['zh-Hans-CN'], note: 'stub' };
+  let calls = 0;
+  const ocr = {
+    capabilities,
+    probe: async () => capabilities,
+    recognize: async jobs => {
+      calls += jobs.length;
+      return new Map(jobs.map(job => [job.id, { ok: true, text: '补做后才有的标记 BACKFILL-4242' }]));
+    },
+    readLegacyDocs: async () => new Map(),
+  };
+  const context = setup({ ocr });
+  try {
+    // 先在"关掉开关"的状态下建索引：图片文字不该进库
+    context.settings.update({ ocrEmbeddedImages: false });
+    const docx = makeZip({
+      'word/document.xml': '<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p></w:body></w:document>',
+      'word/media/shot.png': Buffer.alloc(30 * 1024, 9),
+    });
+    writeFileSync(join(context.root, '开关测试.docx'), docx);
+    await context.engine.run('now');
+    assert.equal(calls, 0, '关着开关时不该抽图');
+    assert.equal(context.store.search(buildSearchPlan('BACKFILL-4242')).hits.length, 0);
+
+    // 打开开关，只跑普通同步（不是重建），该文件应被自动补做一次
+    context.settings.update({ ocrEmbeddedImages: true });
+    const summary = await context.engine.run('now');
+    assert.equal(calls, 1, '打开开关后应补做一次内嵌图片 OCR');
+    assert.equal(summary.embeddedImages, 1);
+    assert.equal(context.store.search(buildSearchPlan('BACKFILL-4242')).hits.length, 1);
+
+    // 再同步一次：已标记过，不该重复抽图
+    const again = await context.engine.run('now');
+    assert.equal(calls, 1, '补做过的文件不该反复重抽');
+    assert.equal(again.embeddedImages, 0, '第二次同步没有新图片要做');
+  } finally {
+    context.cleanup();
+  }
+});
+
+test('内嵌图片 OCR：小于阈值的图按 logo 跳过，关掉开关则完全不抽图', async () => {
+  const capabilities = { ocr: true, pdf: true, word: false, ocrLangs: ['zh-Hans-CN'], note: 'stub' };
+  let calls = 0;
+  const ocr = {
+    capabilities,
+    probe: async () => capabilities,
+    recognize: async jobs => {
+      calls += jobs.length;
+      return new Map(jobs.map(job => [job.id, { ok: true, text: '不该出现' }]));
+    },
+    readLegacyDocs: async () => new Map(),
+  };
+  const context = setup({ ocr });
+  try {
+    const docx = makeZip({
+      'word/document.xml': '<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>正文</w:t></w:r></w:p></w:body></w:document>',
+      'word/media/logo.png': Buffer.alloc(2 * 1024, 3),   // 2KB，阈值以下
+    });
+    writeFileSync(join(context.root, '带小logo.docx'), docx);
+    const summary = await context.engine.run('now');
+    assert.equal(summary.embeddedImages, 0);
+    assert.equal(calls, 0, '小图不该送去 OCR');
+
+    context.settings.update({ ocrEmbeddedImages: false });
+    await context.engine.run('now');
+    assert.equal(calls, 0, '关掉开关后完全不该抽图');
   } finally {
     context.cleanup();
   }

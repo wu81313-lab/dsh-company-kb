@@ -308,3 +308,51 @@ test('GET /preview 拒绝索引之外的文件（与 /raw 同一套校验）', a
     await context.cleanup();
   }
 });
+
+test('GET /search 支持按类型与时间筛选', async () => {
+  const context = await setup();
+  try {
+    const all = await (await fetch(`${context.base}/search?q=${encodeURIComponent('追溯')}`)).json();
+    assert.ok(all.hits.length > 0);
+    const onlyPng = await (await fetch(`${context.base}/search?q=${encodeURIComponent('追溯')}&ext=png`)).json();
+    assert.ok(onlyPng.hits.every(hit => String(hit.rel).endsWith('.png')), '类型筛选应只返回该类型');
+    const onlyTxt = await (await fetch(`${context.base}/search?q=${encodeURIComponent('追溯')}&ext=.txt`)).json();
+    assert.ok(onlyTxt.hits.every(hit => String(hit.rel).endsWith('.txt')), 'ext 带点也认');
+    const recent = await (await fetch(`${context.base}/search?q=${encodeURIComponent('追溯')}&days=1`)).json();
+    assert.ok(recent.hits.length > 0, '刚写入的文件算最近 1 天');
+    const none = await (await fetch(`${context.base}/search?q=${encodeURIComponent('追溯')}&ext=.pdf`)).json();
+    assert.equal(none.hits.length, 0, '库里没有的类型应返回空');
+  } finally {
+    await context.cleanup();
+  }
+});
+
+test('POST /resync 只重抽指定文件，空列表报 400', async () => {
+  const context = await setup();
+  try {
+    const response = await fetch(`${context.base}/resync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rels: ['公司简介.txt'] }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).started, true);
+
+    const empty = await fetch(`${context.base}/resync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rels: [] }),
+    });
+    assert.equal(empty.status, 400);
+
+    for (let i = 0; i < 50; i += 1) {
+      const logs = await (await fetch(`${context.base}/log?limit=1`)).json();
+      if (String(logs.entries[0].message).includes('retry')) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const logs = await (await fetch(`${context.base}/log?limit=1`)).json();
+    assert.match(String(logs.entries[0].message), /同步\(retry\)/u);
+  } finally {
+    await context.cleanup();
+  }
+});

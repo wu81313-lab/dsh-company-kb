@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { renderDocxHtml } from '../lib/render/docx.js';
 import { renderXlsxHtml } from '../lib/render/xlsx.js';
 import { renderPptxHtml } from '../lib/render/pptx.js';
-import { renderDocumentHtml } from '../lib/render/index.js';
+import { renderDocumentHtml, createHighlighter, highlightTerms } from '../lib/render/index.js';
 import { makeZip, TINY_PNG } from './helpers/zip-writer.mjs';
 
 const media = name => `/company-kb-api/media?rel=x.docx&name=${encodeURIComponent(name)}`;
@@ -167,8 +167,7 @@ test('pptx：每页一张卡片，标题、要点、图片、备注都在', () =
   assert.match(html, /<h2>实施计划<\/h2>/u);
 });
 
-test('renderDocumentHtml：外壳带 CSP 友好的内联样式与统计脚注', () => {
-  const docx = makeDocx('<w:p><w:r><w:t>正文</w:t></w:r></w:p>');
+test('renderDocumentHtml：外壳带 CSP 友好的内联样式与统计脚注', () => {  const docx = makeDocx('<w:p><w:r><w:t>正文</w:t></w:r></w:p>');
   const { html } = renderDocumentHtml({ buffer: docx, ext: '.docx', rel: '方案/示例.docx', mediaBase: '/company-kb-api/media' });
   assert.match(html, /^<!doctype html>/u);
   assert.match(html, /<meta charset="utf-8">/u);
@@ -177,4 +176,34 @@ test('renderDocumentHtml：外壳带 CSP 友好的内联样式与统计脚注', 
     () => renderDocumentHtml({ buffer: Buffer.from('x'), ext: '.doc', rel: 'a.doc', mediaBase: '/m' }),
     /暂不支持预览/u,
   );
+});
+
+
+test('命中高亮：查询词被包成 <mark>，第一处带 id 便于直接滚动', () => {
+  assert.equal(createHighlighter('农药追溯').highlight('关于农药追溯二维码的通知'),
+    '关于<mark class="kb-hit" id="kb-hit-0">农药追溯</mark>二维码的通知');
+  assert.equal(createHighlighter('农药追溯').highlight('无关内容'), '无关内容');
+  assert.equal(createHighlighter('农药追溯').highlight('两个农药追溯和农药追溯'),
+    '两个<mark class="kb-hit" id="kb-hit-0">农药追溯</mark>和<mark class="kb-hit">农药追溯</mark>');
+  // 同一个 highlighter 内部计数连续：全文只有第一处带 id
+  const shared = createHighlighter('追溯');
+  assert.equal(shared.highlight('追溯'), '<mark class="kb-hit" id="kb-hit-0">追溯</mark>');
+  assert.equal(shared.highlight('追溯'), '<mark class="kb-hit">追溯</mark>');
+});
+
+test('命中高亮：查询词按标点切分，且不会破坏 HTML 结构', () => {
+  assert.deepEqual(highlightTerms('农药追溯 二维码, 政策').sort(), ['农药追溯', '二维码', '政策'].sort());
+  assert.deepEqual(highlightTerms('的'), [], '单字不参与高亮');
+  // 高亮的输入是"已转义的纯文本"，所以文档里的尖括号只会以实体形式出现
+  const { highlight } = createHighlighter('<b>');
+  const escaped = '&lt;b&gt;';
+  assert.equal(highlight(escaped), '<mark class="kb-hit" id="kb-hit-0">&lt;b&gt;</mark>');
+});
+
+test('命中高亮：preview 接口把查询词传进渲染结果', () => {
+  const docx = makeDocx('<w:p><w:r><w:t>这是一段含有追溯二维码的正文</w:t></w:r></w:p>');
+  const { html } = renderDocumentHtml({ buffer: docx, ext: '.docx', rel: 'a.docx', mediaBase: '/m', query: '追溯二维码' });
+  assert.ok(html.includes('<mark class="kb-hit" id="kb-hit-0">追溯二维码</mark>'), '预览里应高亮查询词');
+  const plain = renderDocumentHtml({ buffer: docx, ext: '.docx', rel: 'a.docx', mediaBase: '/m' }).html;
+  assert.ok(!plain.includes('<mark'), '不传查询词时不应有任何高亮');
 });
