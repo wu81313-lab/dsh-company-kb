@@ -138,3 +138,41 @@ test('全量重建会清空后重抽', async () => {
     context.cleanup();
   }
 });
+
+test('同步记录带逐文件明细：新增/更新/删除都能看到具体文件名', async () => {
+  const context = setup();
+  try {
+    const latest = () => context.store.recentLogs(1)[0];
+
+    // 1) 首次同步：3 个文件都是新增，其中 dwg 只登记元数据
+    await context.engine.run('now');
+    const first = latest();
+    assert.ok(first.details !== null, '同步记录应带明细');
+    assert.deepEqual(
+      first.details.added.map(item => item.rel).sort(),
+      ['公司简介.txt', '图块综合.dwg', '方案模板/通用模板.md'].sort(),
+    );
+    const dwgEntry = first.details.added.find(item => item.rel === '图块综合.dwg');
+    assert.match(String(dwgEntry.note), /仅登记/u);
+    assert.equal(first.details.updated.length, 0);
+    assert.equal(first.details.removed.length, 0);
+
+    // 2) 改一个文件 → 明细里应出现在"更新"
+    writeFileSync(join(context.root, '公司简介.txt'), '示例科技有限公司，产品追溯系统，本次内容有变化。', 'utf8');
+    await context.engine.run('now');
+    const second = latest();
+    assert.deepEqual(second.details.updated.map(item => item.rel), ['公司简介.txt']);
+    assert.equal(second.details.added.length, 0);
+
+    // 3) 删一个文件 → 明细里应出现在"删除"
+    unlinkSync(join(context.root, '方案模板', '通用模板.md'));
+    await context.engine.run('now');
+    const third = latest();
+    assert.deepEqual(third.details.removed, ['方案模板/通用模板.md']);
+
+    // 4) 旧记录（没有明细的那些）读出来必须是 null，而不是崩
+    assert.equal(context.store.recentLogs(50).every(entry => 'details' in entry), true);
+  } finally {
+    context.cleanup();
+  }
+});

@@ -67,7 +67,7 @@ lib/
   cli.mjs          命令行：status / probe / index / search / read / list
   selftest.mjs     验收自测：抽取覆盖率 + 15 条金标查询
   extract/         zip / docx / xlsx / pptx / text / media（零第三方依赖）
-test/              node --test 单测（门禁、分词、分块、索引、HTTP、手动同步语义）
+test/              node --test 单测（门禁、分词、分块、索引、HTTP、手动同步语义、面板渲染）
 skills/company-kb/ 技能：检索流程与引用规则
 ```
 
@@ -126,7 +126,9 @@ skills/company-kb/ 技能：检索流程与引用规则
 - 启动**不扫描**：只打开数据库、校验 schema，并做一次"体检"（stat 比对，只报告差异）。
 - 检索结果与状态卡会提示"索引之后有 N 个文件变化"，提醒你手动同步，但**绝不偷偷重建**。
 - 每次同步按文件单事务提交：中止、断电、DSH 重启都不会留下半写的块，下次同步自然续做。
-- 同步摘要（新增/更新/删除/跳过/失败/耗时）写入 `sync_log`，面板「同步记录」可查。
+- 同步摘要（新增/更新/删除/跳过/失败/耗时）写入 `sync_log`，面板「同步记录」可查；
+  每条记录下面还会**逐文件列出这次到底同步了哪些内容**（新增 / 更新 / 删除 / 失败四组，
+  带相对路径；新增与更新的文件可一键在资源管理器中定位）。老记录没有明细，就只显示摘要。
 
 ## 为什么这样检索
 
@@ -170,8 +172,7 @@ OCR / Word 都不可用时不会报错中断：相应文件标为 `needs_ocr` / 
 ## 验收
 
 ```bash
-node --test test/chunk.test.mjs test/gate.test.mjs test/http.test.mjs test/segment.test.mjs test/store.test.mjs test/sync.test.mjs
-                                     # 46 项单测：门禁/分词/分块/索引/HTTP/打开原文件/回环校验
+node --test test/*.test.mjs          # 51 项单测：门禁/分词/分块/索引/HTTP/面板渲染/打开原文件/回环校验
 node lib/selftest.mjs --rebuild      # 全量重建 + 抽取覆盖率 + 15 条金标查询
 node lib/cli.mjs status              # 状态与失败清单
 node lib/cli.mjs search "关键词"
