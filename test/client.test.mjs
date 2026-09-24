@@ -104,3 +104,68 @@ test('同步记录明细：超过上限时截断并提示剩余数量', () => {
   assert.ok(text.includes(`……还有 5 个文件未列出`), `应提示剩余数量，实际：${text.filter(t => t.includes('还有')).join('/')}`);
   assert.equal(text.filter(item => /^资料\/文件-\d+\.txt$/u.test(item)).length, LOG_FILES_MAX);
 });
+
+
+test('布局：比例与高度都被夹在合法区间，脏值回落默认', () => {
+  const { clampSplit, clampHeight, SPLIT_RANGE, HEIGHT_RANGE } = loadClient();
+  assert.equal(clampSplit(36), 36);
+  assert.equal(clampSplit(SPLIT_RANGE[0] - 10), SPLIT_RANGE[0]);
+  assert.equal(clampSplit(SPLIT_RANGE[1] + 10), SPLIT_RANGE[1]);
+  assert.equal(clampSplit('abc'), 36);
+  assert.equal(clampSplit(undefined), 36);
+  assert.equal(clampSplit(Number.NaN), 36);
+
+  assert.equal(clampHeight(620), 620);
+  assert.equal(clampHeight(HEIGHT_RANGE[0] - 100), HEIGHT_RANGE[0]);
+  assert.equal(clampHeight(HEIGHT_RANGE[1] + 100), HEIGHT_RANGE[1]);
+  assert.equal(clampHeight(-5), HEIGHT_RANGE[0], '负数夹到下限');
+  assert.equal(clampHeight(''), 620, '空串当没给值');
+});
+
+test('布局：默认高度跟着窗口走，但始终在区间内', () => {
+  const { defaultHeight, HEIGHT_RANGE, clampHeight } = loadClient();
+  assert.equal(defaultHeight(1200), 720, '大窗口封顶 720');
+  assert.equal(defaultHeight(600), 360, '小窗口也要比旧的"视口减 290"大一档');
+  assert.equal(defaultHeight(0), 620, '拿不到视口高度时用 620');
+  assert.equal(defaultHeight(undefined), 620);
+  for (const viewport of [200, 400, 600, 800, 1200, 4000]) {
+    const height = defaultHeight(viewport);
+    assert.ok(height >= HEIGHT_RANGE[0] && height <= HEIGHT_RANGE[1], '视口高度 ' + viewport + ' 时结果应在区间内');
+    assert.equal(height, clampHeight(height));
+  }
+});
+
+test('布局：读 storage 容错——非法 JSON、缺字段、越界值都能安全落地', () => {
+  const { readLayout, writeLayout, LAYOUT_KEY, SPLIT_RANGE, HEIGHT_RANGE } = loadClient();
+  const store = (initial = {}) => {
+    const map = new Map(Object.entries(initial));
+    return {
+      getItem: key => (map.has(key) ? map.get(key) : null),
+      setItem: (key, value) => map.set(key, String(value)),
+    };
+  };
+
+  assert.deepEqual(readLayout(store()), { ratio: 36, height: null }, '空 storage 用默认');
+  assert.deepEqual(readLayout(null), { ratio: 36, height: null }, '拿不到 storage 也不炸');
+  assert.deepEqual(readLayout(store({ [LAYOUT_KEY]: '{不是 JSON' })), { ratio: 36, height: null });
+  assert.deepEqual(readLayout(store({ [LAYOUT_KEY]: '"字符串"' })), { ratio: 36, height: null });
+  assert.deepEqual(readLayout(store({ [LAYOUT_KEY]: '{"ratio":"abc","height":-5}' })), { ratio: 36, height: null });
+  assert.deepEqual(readLayout(store({ [LAYOUT_KEY]: '{"ratio":95,"height":99999}' })),
+    { ratio: SPLIT_RANGE[1], height: HEIGHT_RANGE[1] }, '越界值被夹紧');
+
+  const storage = store();
+  writeLayout(storage, { ratio: 52, height: 880 });
+  assert.deepEqual(readLayout(storage), { ratio: 52, height: 880 }, '写进去能读回来');
+  writeLayout(storage, { ratio: 10, height: null });
+  assert.deepEqual(readLayout(storage), { ratio: SPLIT_RANGE[0], height: null }, '写的时候也要夹紧');
+});
+
+test('布局：storage 抛异常时静默失败，不影响使用', () => {
+  const { readLayout, writeLayout } = loadClient();
+  const hostile = {
+    getItem: () => { throw new Error('SecurityError'); },
+    setItem: () => { throw new Error('QuotaExceededError'); },
+  };
+  assert.deepEqual(readLayout(hostile), { ratio: 36, height: null });
+  assert.doesNotThrow(() => writeLayout(hostile, { ratio: 50, height: 700 }));
+});

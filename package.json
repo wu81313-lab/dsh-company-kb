@@ -1,6 +1,6 @@
 {
   "name": "dsh-company-kb",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "DSH local folder knowledge base: manual-sync indexing, Chinese hybrid retrieval, explicit-invocation gate, in-panel Office preview, and a Web panel.",
   "keywords": [
