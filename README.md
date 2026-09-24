@@ -5,6 +5,8 @@
 
 - 索引对象：本地任意目录（在面板「设置」页填 `roots`），**只读，插件永不写入**
 - 检索方式：中文分词 BM25 + 中文二字组合 + trigram 子串 → RRF 融合（全离线，零外部服务）
+- 文档预览：`.docx` / `.xlsx` / `.pptx` 由插件自己解析成带排版的 HTML（Word 保留标题/表格/图片，
+  Excel 是真表格网格，PPT 是分页卡片）——不启动 Office、不转 PDF、不写临时文件
 - 同步方式：**纯手动**（面板按钮 / 明确要求 / 命令行），没有任何定时器
 - 交付形态：5 个模型工具 + Web 面板（侧边栏底部面板入口 / 会话开关 / 设置页）+ `company-kb` 技能
 
@@ -66,10 +68,11 @@ lib/
   focus-helper.ps1 把资源管理器窗口提到前台（后台进程默认不许抢前台，靠 AttachThreadInput 提权）
   settings.js      运行时设置（settings.json，热生效）
   client.js        客户端 bundle（手写 __ModuleLoader__ + React.createElement）
+  render/          文档预览：docx → 排版化 HTML、xlsx → 表格网格、pptx → 分页卡片（零依赖）
   cli.mjs          命令行：status / probe / index / search / read / list
   selftest.mjs     验收自测：抽取覆盖率 + 15 条金标查询
   extract/         zip / docx / xlsx / pptx / text / media（零第三方依赖）
-test/              node --test 单测（门禁、分词、分块、索引、HTTP、手动同步语义、面板渲染）
+test/              node --test 单测（门禁、分词、分块、索引、HTTP、手动同步语义、面板渲染、文档预览）
 skills/company-kb/ 技能：检索流程与引用规则
 ```
 
@@ -92,10 +95,15 @@ skills/company-kb/ 技能：检索流程与引用规则
 - **侧边栏底部「本地知识库」**（在「设置」按钮上方，独占一行）：索引概况（文件数/字符/检索片段/上次同步/失败/待同步变化）、立即同步、重建索引、中止、进度条、搜索（含原文预览与失败清单）、同步记录
   - 面板分「搜索」「同步记录」两个页签；`/company-kb-api/tree` 与 `kb_list` 工具仍可用于浏览目录，只是不再占用面板页签。
   - 该入口挂在 `sidebar.footer.action`，与「设置」按钮同一列：插件把该列改成 `flex-direction:column`，因此三个入口各占一行、不会重叠。
-- **原文预览处的两个按钮**：
+- **原文预览**（点搜索结果或「同步记录」里的文件名即打开）：
   - 「用本机程序打开」= 交给系统默认程序，等价于双击：`.docx/.doc` → WPS/Word，`.xlsx` → WPS/Excel，`.pptx` → PowerPoint，`.pdf` → PDF 阅读器；`.dwg` 等图纸同理。打开后你可以直接在里面查看甚至编辑（原文件本身仍是你的，插件不参与写入）。
-  - 「在文件夹中显示」= 在资源管理器中定位该文件。
-  - 图片与 PDF 还会**在面板内直接渲染**（`/raw` 直出原文件），文档类则显示抽取出的正文。
+  - 「在文件夹中显示」= 在资源管理器中定位该文件，并把资源管理器窗口提到前台（`focus-helper.ps1`）。
+  - 图片与 PDF **在面板内直接渲染**（`/raw` 直出原文件）。
+  - `.docx` / `.xlsx` / `.pptx` 走**排版预览**（`/preview`）：插件解析文件结构渲染成 HTML ——
+    Word 保留标题层级、加粗斜体、列表、表格、内嵌图片；Excel 渲染成真正的表格网格（行号列标、
+    合并单元格、多工作表、日期/百分比/千分位格式）；PPT 渲染成分页卡片。可随时切到「抽取正文」看纯文本。
+    这一路**不启动 Office、不转 PDF**：79MB 的投标 docx 渲染 3935 段 + 38 表 + 287 图只需 210ms。
+    旧版 `.doc/.xls/.ppt` 是二进制格式，仍只显示抽取的文字。
 - **输入框右侧「知识库」开关**：切换本会话是否允许检索（等价于点名）
 - **设置 → 插件 → 本地知识库**：根目录、同步方式、显式调用、路径点名、trigram、旧版 Office 处理、触发词（全部热生效，不用重启）
 
@@ -169,12 +177,15 @@ OCR / Word 都不可用时不会报错中断：相应文件标为 `needs_ocr` / 
 | 点「在文件夹中显示 / 用本机程序打开」没反应 | 四个已知坑：Node 给 `/select,路径` 自动加引号后 explorer 解析不了、`detached` 进程不弹窗、`windowsHide` 会把 explorer 自己创建的窗口藏起来、**窗口开在浏览器后面**（Windows 不允许后台进程抢前台，看起来就像没反应）。前三个已按"手动拼 `/select,"完整路径"` + `windowsVerbatimArguments` + 不 detach + 不隐藏"修掉；第四个由 `focus-helper.ps1` 在定位后把窗口提到前台（`AttachThreadInput` 提权）。可用 `node test/reveal-probe.mjs "<文件路径>" reveal` 复现，再用 PowerShell 对比前台窗口标题验证 |
 | 排查时想确认窗口到底有没有弹出 | 用 PowerShell 枚举可见窗口对比前后即可；**不要**用 `$js \| node` 把含中文路径的脚本从 stdin 喂进去——管道按本地代码页转码，中文路径会变乱码，容易误判"无效" |
 | Word 提取偶发卡死 | 已按"一份文件一批 + 75s 超时"隔离；仍频繁出现可设 `legacyDoc: 'skip'`，或在设置页关掉 |
+| 排版预览和原件长得不一样 | 这是**阅读还原**而不是像素级排版：字体度量、分页、文本框/SmartArt/公式/图表不还原（内容不会丢，降级成普通文字）。要看原样请点「用本机程序打开」 |
+| 预览里图片不显示 | 预览图片走 `/media` 从压缩包里直接读（不落盘）。若某张图是"链接式"引用（`r:link` 而非 `r:embed`）则取不到——这属于原文件本身引用了外部图片 |
+| 预览渲染很慢或空白 | `.docx/.xlsx/.pptx` 才走排版预览；旧版 `.doc/.xls/.ppt` 是二进制格式，只看得到抽取的文字。可用 `node test/render-probe.mjs "<文件路径>"` 看渲染统计与告警 |
 | 索引体积过大 | 设置页关掉 trigram 后重建；或删除 `~/.dsh/local-kb` 重新建库 |
 
 ## 验收
 
 ```bash
-node --test test/*.test.mjs          # 54 项单测：门禁/分词/分块/索引/HTTP/面板渲染/打开原文件/回环校验
+node --test test/*.test.mjs          # 64 项单测：门禁/分词/分块/索引/HTTP/面板渲染/文档预览/打开原文件/回环校验
 node lib/selftest.mjs --rebuild      # 全量重建 + 抽取覆盖率 + 15 条金标查询
 node lib/cli.mjs status              # 状态与失败清单
 node lib/cli.mjs search "关键词"
@@ -185,6 +196,7 @@ node lib/cli.mjs search "关键词"
 ## 安全边界
 
 - 插件对知识库目录**只读**：只调用读操作，从不写入、移动或删除其中任何文件。
+- /preview 只读解析**已在索引中、且位于配置根目录之内**的文件，渲染结果放进 iframe（沙箱 + CSP：禁止脚本、禁止外部请求），文档里的文本一律转义。
 - 唯一的写入目标是 `~/.dsh/local-kb/`（索引库与设置）与系统临时目录（OCR 中间文件，用完即删）。
 - Web API 挂在 DSH 自身站点下（默认 `127.0.0.1:8080`），能力仅"读索引 + 触发同步 + 读写插件设置
   + 打开/直出**已在索引中且位于配置根目录之内**的文件"；接口只接受回环 Host（挡 DNS rebinding）。

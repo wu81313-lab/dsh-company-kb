@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createKbCore } from '../lib/core.js';
 import { registerWebApi } from '../lib/web.js';
+import { makeZip, TINY_PNG } from './helpers/zip-writer.mjs';
 
 async function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-company-kb-http-'));
@@ -249,6 +250,60 @@ test('GET /raw 直出原文件，且拒绝根目录之外的文件', async () =>
     });
     assert.equal(deniedOpen.status, 403);
     assert.equal(context.opened.length, 0, '被拒绝的文件不得交给系统程序');
+  } finally {
+    await context.cleanup();
+  }
+});
+
+test('GET /preview 渲染 Office 文档为 HTML，并带沙箱 CSP', async () => {
+  const context = await setup();
+  try {
+    // 现造一个带标题与图片的 docx，同步进索引后再走接口
+    const docx = makeZip({
+      '[Content_Types].xml': '<?xml version="1.0"?><Types/>',
+      'word/document.xml': '<?xml version="1.0"?><w:document><w:body>'
+        + '<w:p><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:r><w:t>预览标题</w:t></w:r></w:p>'
+        + '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>单元格甲</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+        + '<w:p><w:r><w:drawing><a:blip r:embed="rId5"/></w:drawing></w:r></w:p>'
+        + '</w:body></w:document>',
+      'word/_rels/document.xml.rels': '<?xml version="1.0"?><Relationships>'
+        + '<Relationship Id="rId5" Type="image" Target="media/logo.png"/></Relationships>',
+      'word/media/logo.png': TINY_PNG,
+    });
+    writeFileSync(join(context.root, '预览样例.docx'), docx);
+    await context.core.sync('now');
+
+    const rel = encodeURIComponent('预览样例.docx');
+    const response = await fetch(`${context.base}/preview?rel=${rel}`);
+    assert.equal(response.status, 200);
+    assert.match(String(response.headers.get('content-type')), /text\/html/u);
+    assert.match(String(response.headers.get('content-security-policy')), /default-src 'none'/u);
+    const html = await response.text();
+    assert.match(html, /预览标题/u);
+    assert.match(html, /单元格甲/u);
+    assert.match(html, /<img class="pic"/u);
+
+    // 预览里的图片：从 zip 条目直出
+    const image = await fetch(`${context.base}/media?rel=${rel}&name=${encodeURIComponent('word/media/logo.png')}`);
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get('content-type'), 'image/png');
+    assert.equal((await image.arrayBuffer()).byteLength, TINY_PNG.length);
+
+    // 压缩包里没有的条目、索引里没有的文件、不支持预览的类型
+    assert.equal((await fetch(`${context.base}/media?rel=${rel}&name=word/media/none.png`)).status, 404);
+    assert.equal((await fetch(`${context.base}/preview?rel=${encodeURIComponent('不存在.docx')}`)).status, 404);
+    assert.equal((await fetch(`${context.base}/preview?rel=${encodeURIComponent('公司简介.txt')}`)).status, 415);
+  } finally {
+    await context.cleanup();
+  }
+});
+
+test('GET /preview 拒绝索引之外的文件（与 /raw 同一套校验）', async () => {
+  const context = await setup();
+  try {
+    writeFileSync(join(context.root, '还没同步.docx'), makeZip({ 'word/document.xml': '<w:document/>' }));
+    const response = await fetch(`${context.base}/preview?rel=${encodeURIComponent('还没同步.docx')}`);
+    assert.equal(response.status, 404, '没进索引的文件不允许预览');
   } finally {
     await context.cleanup();
   }
