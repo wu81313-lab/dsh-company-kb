@@ -19,7 +19,7 @@ function makeStore() {
 function addDoc(store, rel, text) {
   const chunks = chunkBlocks([{ kind: 'heading', level: 1, text: rel }, { kind: 'para', text }], { chunkChars: 400, chunkOverlap: 0 });
   // Windows 路径统一成反斜杠，避免测试里两种写法对不上
-  const path = `F:\\kb\\${rel.replaceAll('/', '\\')}`;
+  const path = `D:\\kb\\${rel.replaceAll('/', '\\')}`;
   return store.upsertDocument({
     path,
     rel,
@@ -156,7 +156,7 @@ test('读取、目录、统计与删除', () => {
     const stats = store.stats();
     assert.equal(stats.docs, 2);
     assert.ok(stats.chunks >= 2);
-    assert.equal(store.deleteDocument('F:\\kb\\公司介绍\\简介.txt'), true);
+    assert.equal(store.deleteDocument('D:\\kb\\公司介绍\\简介.txt'), true);
     assert.equal(store.stats().docs, 1);
     const afterDelete = store.search(buildSearchPlan('示例'));
     assert.equal(afterDelete.hits.length, 0, '删除后不应再命中');
