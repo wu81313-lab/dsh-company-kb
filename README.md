@@ -62,6 +62,8 @@ lib/
   web.js           宿主 HTTP API（同源，供面板调用）
   ocr.js           OCR / Word 助手桥（临时文件传参，不用管道）
   ocr-helper.ps1   Windows PowerShell 5.1 + WinRT：PDF 渲染、图片 OCR、Word COM
+  open.js          用系统默认程序打开 / 在资源管理器中定位（explorer /select + 前台提权）
+  focus-helper.ps1 把资源管理器窗口提到前台（后台进程默认不许抢前台，靠 AttachThreadInput 提权）
   settings.js      运行时设置（settings.json，热生效）
   client.js        客户端 bundle（手写 __ModuleLoader__ + React.createElement）
   cli.mjs          命令行：status / probe / index / search / read / list
@@ -164,7 +166,7 @@ OCR / Word 都不可用时不会报错中断：相应文件标为 `needs_ocr` / 
 | 检索说"尚未建库" | 还没手动同步过：点面板「立即同步」或 `node lib/cli.mjs index` |
 | 搜不到刚放进去的资料 | 这是手动同步模型：先同步（结果里会提示"索引之后有 N 个文件变化"） |
 | 某个文件没有正文 | `kb_status` 看失败清单：`needs_ocr`（扫描件/纯图片）、`needs_conversion`（旧版 Office）、`metadata`（二进制或超限） |
-| 点「在文件夹中显示 / 用本机程序打开」没反应 | 三个已知坑：Node 给 `/select,路径` 自动加引号后 explorer 解析不了、`detached` 进程不弹窗、`windowsHide` 会把 explorer 自己创建的窗口藏起来。本插件改为手动拼 `/select,"完整路径"` + `windowsVerbatimArguments` + 不 detach + 不隐藏；可用 `node test/reveal-probe.mjs "<文件路径>" reveal` 复现验证 |
+| 点「在文件夹中显示 / 用本机程序打开」没反应 | 四个已知坑：Node 给 `/select,路径` 自动加引号后 explorer 解析不了、`detached` 进程不弹窗、`windowsHide` 会把 explorer 自己创建的窗口藏起来、**窗口开在浏览器后面**（Windows 不允许后台进程抢前台，看起来就像没反应）。前三个已按"手动拼 `/select,"完整路径"` + `windowsVerbatimArguments` + 不 detach + 不隐藏"修掉；第四个由 `focus-helper.ps1` 在定位后把窗口提到前台（`AttachThreadInput` 提权）。可用 `node test/reveal-probe.mjs "<文件路径>" reveal` 复现，再用 PowerShell 对比前台窗口标题验证 |
 | 排查时想确认窗口到底有没有弹出 | 用 PowerShell 枚举可见窗口对比前后即可；**不要**用 `$js \| node` 把含中文路径的脚本从 stdin 喂进去——管道按本地代码页转码，中文路径会变乱码，容易误判"无效" |
 | Word 提取偶发卡死 | 已按"一份文件一批 + 75s 超时"隔离；仍频繁出现可设 `legacyDoc: 'skip'`，或在设置页关掉 |
 | 索引体积过大 | 设置页关掉 trigram 后重建；或删除 `~/.dsh/local-kb` 重新建库 |
@@ -172,7 +174,7 @@ OCR / Word 都不可用时不会报错中断：相应文件标为 `needs_ocr` / 
 ## 验收
 
 ```bash
-node --test test/*.test.mjs          # 51 项单测：门禁/分词/分块/索引/HTTP/面板渲染/打开原文件/回环校验
+node --test test/*.test.mjs          # 54 项单测：门禁/分词/分块/索引/HTTP/面板渲染/打开原文件/回环校验
 node lib/selftest.mjs --rebuild      # 全量重建 + 抽取覆盖率 + 15 条金标查询
 node lib/cli.mjs status              # 状态与失败清单
 node lib/cli.mjs search "关键词"
